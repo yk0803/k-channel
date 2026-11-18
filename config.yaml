@@ -1,0 +1,103 @@
+# batch-1 config (paths + hardware + splits). Later batches replace this with the full file.
+paths:
+  mtf_root: "/path/to/k-channel-data/MTF/MTF data set"
+  work_dir: /path/to/k-channel-data/work
+  third_party: /path/to/k-channel-data/third_party
+  weights_dir: /path/to/k-channel-data/weights
+  blendpose_ddpm: /path/to/k-channel-data/third_party/Generative-BlendPose-LDM/models/ddpm_500_Light.pth
+  blendpose_vae: /path/to/k-channel-data/third_party/Generative-BlendPose-LDM/models/vae_autoencoder.pth
+hardware: {device: cuda, num_workers: 8, eval_batch_size: 64, amp: true}
+splits: {identity_fold_B_fraction: 0.5, identity_split_seed: 0}
+alignment: transfer
+embedder_options:
+  facenet_vggface2: {margin: 0.0}   # P1.2 crop test 10-26: TAR@1e-3 0.566 (0.494 at 0.25)
+  adaface_ir101_webface12m: {channel_order: rgb}     # P1.2 B6: rgb TAR@1e-4 0.906 vs bgr 0.886
+  adaface_vit_base_webface4m: {channel_order: rgb}   # P1.2 B6: rgb TAR@1e-4 0.899 vs bgr 0.859
+# ---------------------------------------------------------------------------------------------
+# EVALUATOR PANEL - FROZEN 2026-10-26 (P1.8), before any anonymized image was scored.
+# Do not edit. Any change must be logged in PROGRESS.md with a reason and a new freeze hash.
+evaluators:
+  frozen: "2026-10-26"
+  embedders:
+    - arcface_r50_webface600k      # ResNet-50 / WebFace600K  (insightface buffalo_l)
+    - arcface_r100_glint360k       # ResNet-100 / Glint360K   (insightface antelopev2)
+    - adaface_ir101_webface12m     # IR-101 / WebFace12M      (CVLface)
+    - adaface_vit_base_webface4m   # ViT-B / WebFace4M        (CVLface)
+    - facenet_vggface2             # InceptionResNetV1 / VGGFace2 = BlendPose's own evaluator (E2 diagonal)
+  classifiers:                     # trained on MTF originals in Part 3; recipes fixed in config
+    - convnext_base_ediAnon
+    - convnext_base_edials
+    - facenet_vggface2_clf
+    - resnet50_heldout
+    - vit_b_16_heldout
+    - swin_t_heldout
+    - efficientnet_v2_s_heldout
+  linear_probes: true
+# ---------------------------------------------------------------------------------------------
+# Part 3 training recipes (faithful to the papers' notebooks; held-out models use a saner recipe)
+guides:
+  edi_anon: convnext_base_ediAnon
+  edials: convnext_base_edials
+  blendpose: facenet_vggface2_clf
+seeds: {anonymizer: [0, 1, 2], guide_replicas: [1, 2, 3, 4], bootstrap: 2000}
+training:
+  convnext_base_ediAnon: {arch: convnext_base, img_size: 224, normalize: false, lr: 1.0e-5, batch_size: 16,
+                          step_size: 20, gamma: 0.001, max_epochs: 100, patience: 5, augment: false, early_stop: train_loss}
+  convnext_base_edials:  {arch: convnext_base, img_size: 256, normalize: false, lr: 1.0e-4, batch_size: 16,
+                          step_size: 20, gamma: 0.001, max_epochs: 100, patience: 3, augment: false, early_stop: train_loss}
+  facenet_vggface2_clf:  {arch: facenet_vggface2, img_size: 160, normalize: facenet, lr: 1.0e-4, batch_size: 32,
+                          max_epochs: 40, patience: 5, augment: true, optimizer: adamw, schedule: cosine}
+  heldout:               {img_size: 224, normalize: imagenet, lr: 1.0e-4, batch_size: 32,
+                          max_epochs: 40, patience: 5, augment: true, optimizer: adamw, schedule: cosine}
+  utility:               {arch: convnext_base, img_size: 224, normalize: false, lr: 1.0e-4, batch_size: 32,
+                          step_size: 20, gamma: 0.1, max_epochs: 100, patience: 5, augment: false}
+  edials_aae:            {epochs: 200, batch_size: 12, patience: 5}
+  convnext_base_ediAnon_nodecay: {arch: convnext_base, img_size: 224, normalize: false, lr: 1.0e-5, batch_size: 16,
+                                  step_size: 20, gamma: 1.0, max_epochs: 100, patience: 5, augment: false, early_stop: train_loss}   # Q10: EDI-Anon recipe without the lr collapse
+# ---------------------------------------------------------------------------------------------
+# Part 4 anonymizers. `faithful` = the paper's operating point; `sweep` = E11 grid.
+anonymizers:
+  simple:                # conventional whole-image baselines, functions imported from the EDI-Anon repo
+    faithful: {perturbation: blur, blur_kernel: 40}
+    sweep:
+      - {perturbation: blur, blur_kernel: 20}
+      - {perturbation: blur, blur_kernel: 40}
+      - {perturbation: pixelate, pixel_size: 20}
+      - {perturbation: pixelate, pixel_size: 50}
+      - {perturbation: dp_pix, b: 32, m: 16, eps: 100}
+      - {perturbation: dp_pix, b: 32, m: 16, eps: 0.1}
+      - {perturbation: dp_blur, b0: 32, m: 16, eps: 0.1, k: 99, sigma: 0}
+    splits: [train, test]
+    paper_eval_split: test
+  blendpose:             # Generative BlendPose-LDM; paper k = donors + 1 (target always included unless include_target false)
+    faithful: {k: 4, img_weight: 0.30, num_steps: 500, diffusion: true}   # Tables 2-3 row k4-ImgW=0.30 Diff
+    sweep:
+      - {k: 2, img_weight: 0.30}
+      - {k: 3, img_weight: 0.30}
+      - {k: 5, img_weight: 0.30}
+      - {k: 6, img_weight: 0.30}
+      - {k: 4, img_weight: 0.0}
+      - {k: 4, img_weight: 0.15}
+      - {k: 4, img_weight: 0.45}
+      - {k: 4, img_weight: 0.60}
+    controls:            # E8
+      - {name: nodiff, k: 4, diffusion: false}                                  # k4-NoDiff_Pose (pixel mean of the blend)
+      - {name: nodiff_donor_only, k: 4, diffusion: false, include_target: false}
+      - {name: donor_only, k: 4, img_weight: 0.30, include_target: false}
+      - {name: text_only, k: 4, img_weight: 0.0}
+    splits: [train, test]
+    paper_eval_split: test
+  edi_anon:              # EDI-Anon (TDP 2025), Iterative/EDI_Anon.ipynb; threshold 1% from the paper (notebook ships a placeholder)
+    faithful: {perturbation: blur, blur_kernel: 40, q: 90, rir_threshold: 1.0, max_iters: 200000}
+    sweep:
+      - {perturbation: blur, blur_kernel: 40, q: 90, rir_threshold: 10.0}
+      - {perturbation: blur, blur_kernel: 40, q: 90, rir_threshold: 5.0}
+      - {perturbation: pixelate, pixel_size: 20, q: 90, rir_threshold: 1.0}
+      - {perturbation: dp_pix, b: 32, m: 16, eps: 100, q: 90, rir_threshold: 1.0}
+      - {perturbation: dp_blur, b0: 32, m: 16, eps: 100, k: 99, sigma: 0, q: 90, rir_threshold: 1.0}
+    splits: [train, test]
+    paper_eval_split: train
+  edials:
+    faithful: {alpha: 0.5, max_iterations: 100000, num_samples: 240}
+    splits: [train, test]
+    paper_eval_split: train
