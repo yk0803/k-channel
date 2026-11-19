@@ -43,3 +43,13 @@ bash scripts/run_evaluation.sh               # waits for a free GPU; resumable
 ## Citation
 
 Citation details will be added on publication.
+
+## Checkpoints
+
+The trained EDIALS autoencoders and the ConvNeXt-Base guide classifiers are attached to release
+[v1.0](https://github.com/yk0803/k-channel/releases/tag/v1.0). Download them with
+
+```bash
+gh release download v1.0 --repo yk0803/k-channel --dir checkpoints
+cd checkpoints && sha256sum -c SHA256SUMS.txt
+```
